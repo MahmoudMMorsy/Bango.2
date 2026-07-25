@@ -1,0 +1,8 @@
+{
+  "name": "Bango",
+  "description": "برنامج مستقل للأتمتة والبحث الآلي اليومي وتغيير الوكيل وإجراء عمليات البحث عبر Gemini وبشكل مجهول.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

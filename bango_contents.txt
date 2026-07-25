@@ -1,0 +1,5 @@
+total 16
+drwxrwxr-x 4 jules jules 4096 Jul 25 03:29 .
+drwxr-xr-x 4 jules root  4096 Jul 25 03:30 ..
+drwxrwxr-x 4 jules jules 4096 Jul 25 03:29 Bango-main
+drwxrwxr-x 4 jules jules 4096 Jul 25 03:29 downloaded
