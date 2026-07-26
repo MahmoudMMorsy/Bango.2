@@ -1,0 +1,6 @@
+{
+  "name": "Web & Flash Game Hub",
+  "description": "Play and download HTML and Flash game source codes directly to your device and play them offline. Supports ZIP compression for HTML source code and SWF playing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
