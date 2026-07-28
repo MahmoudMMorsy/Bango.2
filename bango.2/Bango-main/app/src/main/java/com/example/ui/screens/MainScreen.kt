@@ -504,13 +504,15 @@ fun ChromeBrowserView(
             Surface(
                 color = SurfaceDark,
                 shadowElevation = 4.dp,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
             ) {
                 Column {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 6.dp, vertical = 6.dp),
+                            .padding(horizontal = 8.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
