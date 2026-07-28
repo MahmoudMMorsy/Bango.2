@@ -128,6 +128,8 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   implementation(libs.androidx.webkit)
   implementation(libs.androidx.work.runtime.ktx)
+  implementation("com.github.yausername.youtubedl-android:library:0.14.0")
+  implementation("com.github.yausername.youtubedl-android:ffmpeg:0.14.0")
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
 }

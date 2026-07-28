@@ -10,10 +10,14 @@ data class GameEntity(
     val sourceUrl: String,
     val localFolder: String, // local folder name or path under context.filesDir
     val zipPath: String,    // local ZIP file path for sharing/exporting
-    val gameType: String,   // "HTML" or "FLASH"
+    val gameType: String,   // "VIDEO", "AUDIO", "HTML", "FLASH", "DOC", "ARCHIVE", "FILE"
     val timestamp: Long = System.currentTimeMillis(),
     val sizeBytes: Long = 0,
-    val isFavorite: Boolean = false
+    val downloadedBytes: Long = 0,
+    val status: String = "COMPLETED", // "DOWNLOADING", "PAUSED", "COMPLETED", "FAILED"
+    val isFavorite: Boolean = false,
+    val speedInfo: String = "",
+    val numSegments: Int = 8
 )
 
 @Entity(tableName = "bookmarks")

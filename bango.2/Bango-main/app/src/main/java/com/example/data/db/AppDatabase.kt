@@ -16,13 +16,17 @@ import com.example.data.model.WeeklyTopic
         SearchQuery::class,
         ProxyConfig::class,
         AutomationLog::class,
-        BrowserProfile::class
+        BrowserProfile::class,
+        com.example.data.GameEntity::class,
+        com.example.data.BookmarkEntity::class,
+        com.example.data.HistoryEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun searchDao(): SearchDao
+    abstract fun gameDao(): com.example.data.GameDao
 
     companion object {
         @Volatile
