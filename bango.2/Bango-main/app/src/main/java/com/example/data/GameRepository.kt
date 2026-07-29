@@ -8,7 +8,7 @@ class GameRepository(private val gameDao: GameDao) {
     val allBookmarks: Flow<List<BookmarkEntity>> = gameDao.getAllBookmarks()
     val recentHistory: Flow<List<HistoryEntity>> = gameDao.getRecentHistory()
 
-    suspend fun insertGame(game: GameEntity) = gameDao.insertGame(game)
+    suspend fun insertGame(game: GameEntity): Long = gameDao.insertGame(game)
 
     suspend fun updateGame(game: GameEntity) = gameDao.updateGame(game)
 

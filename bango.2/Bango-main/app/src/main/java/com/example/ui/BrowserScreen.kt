@@ -4,15 +4,17 @@ import android.content.Context
 import android.view.ViewGroup
 import android.webkit.*
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,42 +31,109 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.R
+import com.example.ui.viewmodel.MainViewModel
+import com.example.ui.screens.applyProfileToWebView
+import com.example.ui.screens.generateAntiFingerprintScript
 import kotlinx.coroutines.launch
+
+data class MediaLink(
+    val url: String,
+    val type: String, // "VIDEO", "AUDIO", "FILE", "SWF", "ZIP"
+    val resolution: String,
+    val title: String
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowserScreen(
     viewModel: GameViewModel,
-    modifier: Modifier = Modifier
+    mainViewModel: MainViewModel,
+    modifier: Modifier = Modifier,
+    onWebViewCreated: (WebView) -> Unit = {}
 ) {
     val context = LocalContext.current
     val currentUrl by viewModel.currentUrl.collectAsState()
     val isBookmarked by viewModel.isCurrentPageBookmarked.collectAsState()
     val searchInput by viewModel.searchInput.collectAsState()
+    val activeProfile by mainViewModel.defaultProfile.collectAsState()
 
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var pageTitle by remember { mutableStateOf("Game Web Browser") }
     var loadProgress by remember { mutableStateOf(0) }
     var isPageLoading by remember { mutableStateOf(false) }
 
-    // Auto detection status
-    var detectedSwfUrl by remember { mutableStateOf<String?>(null) }
-    var detectedZipUrl by remember { mutableStateOf<String?>(null) }
-    var detectedVideoUrl by remember { mutableStateOf<String?>(null) }
-    var detectedFileUrl by remember { mutableStateOf<String?>(null) }
+    // SnapTube Media Sniffer auto detection status
+    val detectedMediaList = remember { mutableStateListOf<MediaLink>() }
+    var showFloatingIdmBanner by remember { mutableStateOf(true) }
 
     // Download dialog visibility
     var showDownloadDialog by remember { mutableStateOf(false) }
 
+    // Overlays for downloads and bookmarks
+    var showDownloadsOverlay by remember { mutableStateOf(false) }
+    var showSavedOverlay by remember { mutableStateOf(false) }
+
     Column(modifier = modifier.fillMaxSize()) {
-        // Address & Toolbar with Status Bar padding to avoid any cutout/notch interference
+        // Active search automation status banner if active
+        if (mainViewModel.isAutomationRunning) {
+            Surface(
+                color = Color(0xFF1E6B38).copy(alpha = 0.95f),
+                tonalElevation = 8.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Active", tint = Color(0xFF4CAF50))
+                            Text(
+                                text = "أتمتة وتصفح نشط آلياً 🤖",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                fontSize = 13.sp
+                            )
+                        }
+
+                        Button(
+                            onClick = { mainViewModel.stopLiveAutomation() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.height(26.dp)
+                        ) {
+                            Text("إيقاف", fontSize = 11.sp, color = Color.White)
+                        }
+                    }
+
+                    Text(
+                        text = "الاستعلام النشط: ${mainViewModel.activeAutomationQueryText}",
+                        color = Color.White.copy(alpha = 0.9f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
+        // Address & Toolbar
         Surface(
             tonalElevation = 8.dp,
             shadowElevation = 4.dp,
             color = MaterialTheme.colorScheme.surface,
             modifier = Modifier.statusBarsPadding()
         ) {
-            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp)) {
+            Column(modifier = Modifier.padding(8.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
@@ -81,7 +150,7 @@ fun BrowserScreen(
                         },
                         modifier = Modifier.testTag("browser_back_button")
                     ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
 
                     IconButton(
@@ -95,7 +164,7 @@ fun BrowserScreen(
                             }
                         }
                     ) {
-                        Icon(Icons.Default.ArrowForward, contentDescription = "Forward")
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward")
                     }
 
                     IconButton(
@@ -152,7 +221,7 @@ fun BrowserScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(
                             onClick = {
-                                val homeUrl = "https://www.crazygames.com"
+                                val homeUrl = "https://www.bing.com"
                                 viewModel.updateUrl(homeUrl)
                                 webViewRef?.loadUrl(homeUrl)
                             }
@@ -178,49 +247,61 @@ fun BrowserScreen(
                             )
                         }
 
+                        // Downloads overlay quick-access button
+                        IconButton(
+                            onClick = { showDownloadsOverlay = true }
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = "Downloads list", tint = MaterialTheme.colorScheme.primary)
+                        }
+
+                        // Saved overlay quick-access button
+                        IconButton(
+                            onClick = { showSavedOverlay = true }
+                        ) {
+                            Icon(Icons.Default.Bookmark, contentDescription = "Saved offline", tint = MaterialTheme.colorScheme.secondary)
+                        }
+
                         // Indicators for auto detected files
-                        if (detectedVideoUrl != null) {
+                        val videoCount = detectedMediaList.count { it.type == "VIDEO" }
+                        val audioCount = detectedMediaList.count { it.type == "AUDIO" }
+                        val otherCount = detectedMediaList.count { it.type != "VIDEO" && it.type != "AUDIO" }
+
+                        if (videoCount > 0) {
                             Badge(
                                 containerColor = MaterialTheme.colorScheme.secondary,
                                 modifier = Modifier
                                     .padding(horizontal = 4.dp)
                                     .clickable { showDownloadDialog = true }
                             ) {
-                                Text("Video Detected", color = Color.White, modifier = Modifier.padding(4.dp), fontSize = 10.sp)
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
+                                    Icon(Icons.Default.Videocam, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text("$videoCount Video${if (videoCount > 1) "s" else ""} Detected", color = Color.White, fontSize = 10.sp)
+                                }
                             }
                         }
-                        if (detectedFileUrl != null) {
-                            Badge(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                modifier = Modifier
-                                    .padding(horizontal = 4.dp)
-                                    .clickable { showDownloadDialog = true }
-                            ) {
-                                Text("Media File Detected", color = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.padding(4.dp), fontSize = 10.sp)
-                            }
-                        }
-                        if (detectedSwfUrl != null) {
+                        if (audioCount > 0) {
                             Badge(
                                 containerColor = MaterialTheme.colorScheme.tertiary,
                                 modifier = Modifier
                                     .padding(horizontal = 4.dp)
-                                    .clickable {
-                                        showDownloadDialog = true
-                                    }
+                                    .clickable { showDownloadDialog = true }
                             ) {
-                                Text("Flash SWF Detected", color = Color.White, modifier = Modifier.padding(4.dp), fontSize = 10.sp)
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
+                                    Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text("$audioCount Audio Detected", color = Color.White, fontSize = 10.sp)
+                                }
                             }
                         }
-                        if (detectedZipUrl != null) {
+                        if (otherCount > 0) {
                             Badge(
                                 containerColor = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier
                                     .padding(horizontal = 4.dp)
-                                    .clickable {
-                                        showDownloadDialog = true
-                                    }
+                                    .clickable { showDownloadDialog = true }
                             ) {
-                                Text("HTML ZIP Detected", color = Color.White, modifier = Modifier.padding(4.dp), fontSize = 10.sp)
+                                Text("$otherCount File(s) Detected", color = Color.White, modifier = Modifier.padding(4.dp), fontSize = 10.sp)
                             }
                         }
                     }
@@ -262,24 +343,44 @@ fun BrowserScreen(
 
                         // WebView Client configurations
                         webViewClient = object : WebViewClient() {
+                            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                                val url = request?.url?.toString() ?: return super.shouldInterceptRequest(view, request)
+                                val lower = url.lowercase()
+
+                                // Advanced Network Sniffing for Media Streams
+                                val isVideo = lower.contains(".m3u8") || lower.contains(".mp4") || lower.contains(".webm") || lower.contains("videoplayback") || lower.contains("video/")
+                                val isAudio = lower.contains(".mp3") || lower.contains(".m4a") || lower.contains(".aac") || lower.contains("audioplayback") || lower.contains("audio/")
+
+                                if (isVideo) {
+                                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                        if (detectedMediaList.none { it.url == url }) {
+                                            val res = if (lower.contains("1080")) "1080p HD" else if (lower.contains("720")) "720p HD" else if (lower.contains("480")) "480p" else if (lower.contains("360")) "360p" else if (lower.contains(".m3u8")) "m3u8 Playlist (Adaptive)" else "Video Stream"
+                                            detectedMediaList.add(MediaLink(url, "VIDEO", res, pageTitle))
+                                        }
+                                    }
+                                } else if (isAudio) {
+                                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                        if (detectedMediaList.none { it.url == url }) {
+                                            val res = if (lower.contains("320") || lower.contains("high")) "320 kbps (High)" else if (lower.contains("128")) "128 kbps" else "Audio Track"
+                                            detectedMediaList.add(MediaLink(url, "AUDIO", res, pageTitle))
+                                        }
+                                    }
+                                }
+
+                                return super.shouldInterceptRequest(view, request)
+                            }
+
                             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                                 super.onPageStarted(view, url, favicon)
                                 isPageLoading = true
-                                detectedSwfUrl = null
-                                detectedZipUrl = null
-                                detectedVideoUrl = null
-                                detectedFileUrl = null
+                                detectedMediaList.clear()
+                                showFloatingIdmBanner = true
                                 url?.let {
                                     viewModel.updateUrl(it)
-                                    val lower = it.lowercase()
-                                    if (lower.endsWith(".swf")) {
-                                        detectedSwfUrl = it
-                                    } else if (lower.endsWith(".zip")) {
-                                        detectedZipUrl = it
-                                    } else if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mkv") || lower.endsWith(".avi") || lower.endsWith(".mp3")) {
-                                        detectedVideoUrl = it
-                                    }
                                 }
+                                // Inject fingerprint protection script
+                                val js = generateAntiFingerprintScript(activeProfile)
+                                view?.evaluateJavascript(js, null)
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
@@ -291,21 +392,48 @@ fun BrowserScreen(
                                         viewModel.addHistoryEntry(it, url)
                                     }
                                 }
+                                // Inject fingerprint protection script
+                                val js = generateAntiFingerprintScript(activeProfile)
+                                view?.evaluateJavascript(js, null)
 
-                                // Inspect DOM for swf, zip, video, audio tags
+                                // Inject XHR/Fetch Interceptor and DOM Sniffer
                                 view?.evaluateJavascript(
                                     """
                                     (function() {
-                                        var res = { swf: null, video: null };
-                                        var embeds = document.getElementsByTagName('embed');
-                                        for(var i=0; i<embeds.length; i++) {
-                                            if(embeds[i].src && embeds[i].src.includes('.swf')) res.swf = embeds[i].src;
-                                        }
+                                        // 1. DOM Sniffing
+                                        var res = { swf: null, video: null, audio: null };
                                         var videos = document.getElementsByTagName('video');
                                         for(var i=0; i<videos.length; i++) {
-                                            if(videos[i].src) res.video = videos[i].src;
-                                            var sources = videos[i].getElementsByTagName('source');
-                                            if(sources.length > 0 && sources[0].src) res.video = sources[0].src;
+                                            var v = videos[i];
+                                            var vsrc = v.currentSrc || v.src;
+                                            if(vsrc && !vsrc.startsWith('blob:')) res.video = vsrc;
+                                            var sources = v.getElementsByTagName('source');
+                                            if(sources.length > 0 && sources[0].src && !sources[0].src.startsWith('blob:')) res.video = sources[0].src;
+                                        }
+                                        var audios = document.getElementsByTagName('audio');
+                                        for(var j=0; j<audios.length; j++) {
+                                            var a = audios[j];
+                                            var asrc = a.currentSrc || a.src;
+                                            if(asrc && !asrc.startsWith('blob:')) res.audio = asrc;
+                                        }
+                                        var embeds = document.getElementsByTagName('embed');
+                                        for(var k=0; k<embeds.length; k++) {
+                                            if(embeds[k].src && embeds[k].src.includes('.swf')) res.swf = embeds[k].src;
+                                        }
+
+                                        // 2. Fetch/XHR Hooking (Optional advanced sniffing)
+                                        if(!window.AndroidSnifferInjected) {
+                                            window.AndroidSnifferInjected = true;
+                                            var origOpen = XMLHttpRequest.prototype.open;
+                                            XMLHttpRequest.prototype.open = function(method, url) {
+                                                if(typeof url === 'string') {
+                                                    var l = url.toLowerCase();
+                                                    if(l.includes('.m3u8') || l.includes('.mp4') || l.includes('videoplayback')) {
+                                                        if (window.AndroidMedia) window.AndroidMedia.notifyMedia(url, 'video');
+                                                    }
+                                                }
+                                                return origOpen.apply(this, arguments);
+                                            };
                                         }
                                         return JSON.stringify(res);
                                     })()
@@ -315,11 +443,21 @@ fun BrowserScreen(
                                         try {
                                             if (result.contains("\"video\":") && !result.contains("\"video\":null")) {
                                                 val vid = result.substringAfter("\"video\":\"").substringBefore("\"")
-                                                if (vid.isNotEmpty() && vid != "null") detectedVideoUrl = vid
+                                                if (vid.isNotEmpty() && vid != "null" && detectedMediaList.none { it.url == vid }) {
+                                                    detectedMediaList.add(MediaLink(vid, "VIDEO", "Video Stream", pageTitle))
+                                                }
+                                            }
+                                            if (result.contains("\"audio\":") && !result.contains("\"audio\":null")) {
+                                                val aud = result.substringAfter("\"audio\":\"").substringBefore("\"")
+                                                if (aud.isNotEmpty() && aud != "null" && detectedMediaList.none { it.url == aud }) {
+                                                    detectedMediaList.add(MediaLink(aud, "AUDIO", "Audio Track", pageTitle))
+                                                }
                                             }
                                             if (result.contains("\"swf\":") && !result.contains("\"swf\":null")) {
                                                 val swf = result.substringAfter("\"swf\":\"").substringBefore("\"")
-                                                if (swf.isNotEmpty() && swf != "null") detectedSwfUrl = swf
+                                                if (swf.isNotEmpty() && swf != "null" && detectedMediaList.none { it.url == swf }) {
+                                                    detectedMediaList.add(MediaLink(swf, "SWF", "Flash Game", pageTitle))
+                                                }
                                             }
                                         } catch(e: Exception) {}
                                     }
@@ -339,34 +477,42 @@ fun BrowserScreen(
                             }
                         }
 
-                        // Apply security and feature flags
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            databaseEnabled = true
-                            allowFileAccess = true
-                            allowContentAccess = true
-                            useWideViewPort = true
-                            loadWithOverviewMode = true
-                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                        }
+                        // Apply security and feature flags with antidetect profile
+                        applyProfileToWebView(this, activeProfile, false)
+
+                        addJavascriptInterface(object {
+                            @JavascriptInterface
+                            fun notifyMedia(url: String, type: String) {
+                                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                    if (detectedMediaList.none { it.url == url }) {
+                                        val res = if (type == "video") "Video Stream" else "Audio Track"
+                                        detectedMediaList.add(MediaLink(url, type.uppercase(), res, pageTitle))
+                                    }
+                                }
+                            }
+                        }, "AndroidMedia")
 
                         setDownloadListener { url, _, _, _, _ ->
                             val lower = url.lowercase()
-                            if (lower.endsWith(".swf")) {
-                                detectedSwfUrl = url
-                            } else if (lower.endsWith(".zip")) {
-                                detectedZipUrl = url
-                            } else if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mkv") || lower.endsWith(".avi") || lower.endsWith(".mov") || lower.endsWith(".mp3")) {
-                                detectedVideoUrl = url
-                            } else {
-                                detectedFileUrl = url
+                            if (lower.endsWith(".swf") && detectedMediaList.none { it.url == url }) {
+                                detectedMediaList.add(MediaLink(url, "SWF", "Flash Game", pageTitle))
+                            } else if (lower.endsWith(".zip") && detectedMediaList.none { it.url == url }) {
+                                detectedMediaList.add(MediaLink(url, "ZIP", "Archive", pageTitle))
+                            } else if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".mkv") || lower.endsWith(".avi") || lower.endsWith(".mov") || lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".aac")) {
+                                if ((lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".aac")) && detectedMediaList.none { it.url == url }) {
+                                    detectedMediaList.add(MediaLink(url, "AUDIO", "Audio Track", pageTitle))
+                                } else if (detectedMediaList.none { it.url == url }) {
+                                    detectedMediaList.add(MediaLink(url, "VIDEO", "Video Stream", pageTitle))
+                                }
+                            } else if (detectedMediaList.none { it.url == url }) {
+                                detectedMediaList.add(MediaLink(url, "FILE", "File", pageTitle))
                             }
                             showDownloadDialog = true
                         }
 
                         loadUrl(currentUrl)
                         webViewRef = this
+                        onWebViewCreated(this)
                     }
                 },
                 modifier = Modifier.fillMaxSize(),
@@ -374,163 +520,426 @@ fun BrowserScreen(
                     // Make sure webView updates with outer states if needed
                 }
             )
-        }
 
-        // Advanced Custom Download Dialogue (التحكم في صيغ الملفات وإدارة التنزيلات)
-        if (showDownloadDialog) {
-            var customTitle by remember { mutableStateOf(pageTitle.take(30)) }
-            var selectedFormat by remember { mutableStateOf("HTML_SCRAPE") } // "HTML_SCRAPE", "DIRECT_ZIP", "FLASH_SWF", "RESUMABLE_VIDEO", "RESUMABLE_FILE"
-            var remoteUrlInput by remember { mutableStateOf(currentUrl) }
+            // SnapTube Floating Red Download Button Widget
+            val hasMediaDetected = detectedMediaList.isNotEmpty()
 
-            // Auto update inputs if anything detected
-            LaunchedEffect(detectedSwfUrl, detectedZipUrl, detectedVideoUrl, detectedFileUrl) {
-                if (detectedVideoUrl != null) {
-                    selectedFormat = "RESUMABLE_VIDEO"
-                    remoteUrlInput = detectedVideoUrl!!
-                } else if (detectedFileUrl != null) {
-                    selectedFormat = "RESUMABLE_FILE"
-                    remoteUrlInput = detectedFileUrl!!
-                } else if (detectedSwfUrl != null) {
-                    selectedFormat = "FLASH_SWF"
-                    remoteUrlInput = detectedSwfUrl!!
-                } else if (detectedZipUrl != null) {
-                    selectedFormat = "DIRECT_ZIP"
-                    remoteUrlInput = detectedZipUrl!!
+            if (hasMediaDetected && showFloatingIdmBanner) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = true,
+                    enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(bottom = 80.dp, end = 16.dp)
+                ) {
+                    Surface(
+                        color = Color(0xFFE53935), // SnapTube Red
+                        shape = RoundedCornerShape(28.dp),
+                        shadowElevation = 10.dp,
+                        modifier = Modifier.clickable { showDownloadDialog = true }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(Color.White, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = "SnapTube Download",
+                                    tint = Color(0xFFE53935),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "SnapTube Downloader",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = Color.White
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        color = Color(0xFFFFD600), // SnapTube Yellow
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            text = detectedMediaList.first().type,
+                                            color = Color.Black,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "تم العثور على ${detectedMediaList.size} ملف! إضغط للتحميل",
+                                    fontSize = 11.sp,
+                                    color = Color.White.copy(alpha = 0.9f)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { showFloatingIdmBanner = false },
+                                modifier = Modifier.size(22.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Dismiss",
+                                    tint = Color.White.copy(alpha = 0.8f)
+                                )
+                            }
+                        }
+                    }
                 }
             }
+        }
+
+        // SnapTube Smart Media Downloader Dialogue (خيارات وإقتراحات التحميل)
+        if (showDownloadDialog) {
+            var customTitle by remember { mutableStateOf(pageTitle.take(30)) }
+            var selectedMediaUrl by remember { mutableStateOf(detectedMediaList.firstOrNull()?.url ?: "") }
+            var selectedThreads by remember { mutableStateOf(8) } // 4, 8, 16 parallel threads
 
             AlertDialog(
                 onDismissRequest = { showDownloadDialog = false },
-                title = { Text("Universal Downloader Wizard", fontWeight = FontWeight.Bold) },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            color = Color(0xFFE53935),
+                            shape = CircleShape,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.Download, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                        Column {
+                            Text("SnapTube Media Downloader", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text("تم اكتشاف ملفات وسائط متعددة", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                },
                 text = {
-                    Column(
+                    LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                            .heightIn(max = 420.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("Download videos, games, and files with HTTP Range resume support:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        item {
+                            OutlinedTextField(
+                                value = customTitle,
+                                onValueChange = { customTitle = it },
+                                label = { Text("اسم الملف / العنوان (Title)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
 
-                        OutlinedTextField(
-                            value = customTitle,
-                            onValueChange = { customTitle = it },
-                            label = { Text("Title / Name") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        OutlinedTextField(
-                            value = remoteUrlInput,
-                            onValueChange = { remoteUrlInput = it },
-                            label = { Text("Source Download URL") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            textStyle = LocalTextStyle.current.copy(fontSize = 12.sp)
-                        )
-
-                        Text("Download Format & Engine (صيغة الملف):", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            // Video / Audio (Resumable)
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { selectedFormat = "RESUMABLE_VIDEO" }
-                                    .padding(vertical = 2.dp)
-                            ) {
-                                RadioButton(selected = selectedFormat == "RESUMABLE_VIDEO", onClick = { selectedFormat = "RESUMABLE_VIDEO" })
-                                Column(modifier = Modifier.padding(start = 8.dp)) {
-                                    Text("Resumable Video / Audio Media", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text("Supports HTTP Range resume for MP4, WEBM, MKV, MP3 without corruption", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // Parallel Threads Selector
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("سرعة التنزيل وتسريع الخيوط (Turbo Accelerator):", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    listOf(4, 8, 16).forEach { threads ->
+                                        FilterChip(
+                                            selected = selectedThreads == threads,
+                                            onClick = { selectedThreads = threads },
+                                            label = { Text("$threads Streams (سريع)", fontSize = 11.sp) },
+                                            leadingIcon = if (selectedThreads == threads) {
+                                                { Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                                            } else null
+                                        )
+                                    }
                                 }
                             }
+                        }
 
-                            // All Files & Documents (Resumable)
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { selectedFormat = "RESUMABLE_FILE" }
-                                    .padding(vertical = 2.dp)
-                            ) {
-                                RadioButton(selected = selectedFormat == "RESUMABLE_FILE", onClick = { selectedFormat = "RESUMABLE_FILE" })
-                                Column(modifier = Modifier.padding(start = 8.dp)) {
-                                    Text("Resumable File / Package", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text("Downloads APK, PDF, RAR, 7Z, and general files with resume support", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val videos = detectedMediaList.filter { it.type == "VIDEO" }
+                        val audios = detectedMediaList.filter { it.type == "AUDIO" }
+                        val others = detectedMediaList.filter { it.type != "VIDEO" && it.type != "AUDIO" }
+
+                        if (videos.isNotEmpty()) {
+                            item {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Videocam, contentDescription = null, tint = Color(0xFFE53935), modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("🎬 فيديوهات (Videos)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
                                 }
                             }
+                            items(videos) { media ->
+                                SnapTubeOptionCard(
+                                    title = media.title,
+                                    subtitle = media.url,
+                                    badge = media.resolution,
+                                    isSelected = selectedMediaUrl == media.url,
+                                    onClick = { selectedMediaUrl = media.url }
+                                )
+                            }
+                        }
 
-                            // HTML Scraper
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { selectedFormat = "HTML_SCRAPE" }
-                                    .padding(vertical = 2.dp)
-                            ) {
-                                RadioButton(selected = selectedFormat == "HTML_SCRAPE", onClick = { selectedFormat = "HTML_SCRAPE" })
-                                Column(modifier = Modifier.padding(start = 8.dp)) {
-                                    Text("HTML Webpage Game Scraper (.zip)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text("Crawls and packages all web assets into a playable ZIP", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (audios.isNotEmpty()) {
+                            item {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color(0xFFE53935), modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("🎵 صوتيات (Audio)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
                                 }
                             }
+                            items(audios) { media ->
+                                SnapTubeOptionCard(
+                                    title = media.title,
+                                    subtitle = media.url,
+                                    badge = media.resolution,
+                                    isSelected = selectedMediaUrl == media.url,
+                                    onClick = { selectedMediaUrl = media.url }
+                                )
+                            }
+                        }
 
-                            // Direct ZIP
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { selectedFormat = "DIRECT_ZIP" }
-                                    .padding(vertical = 2.dp)
-                            ) {
-                                RadioButton(selected = selectedFormat == "DIRECT_ZIP", onClick = { selectedFormat = "DIRECT_ZIP" })
-                                Column(modifier = Modifier.padding(start = 8.dp)) {
-                                    Text("Direct ZIP Game Installer (.zip)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text("Downloads offline pre-packaged game ZIP directly", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (others.isNotEmpty()) {
+                            item {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("📦 ملفات أخرى (Files & Games)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
                                 }
                             }
-
-                            // Flash SWF
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { selectedFormat = "FLASH_SWF" }
-                                    .padding(vertical = 2.dp)
-                            ) {
-                                RadioButton(selected = selectedFormat == "FLASH_SWF", onClick = { selectedFormat = "FLASH_SWF" })
-                                Column(modifier = Modifier.padding(start = 8.dp)) {
-                                    Text("Flash Game SWF File (.swf)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    Text("Downloads SWF to run with embedded Ruffle emulator", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
+                            items(others) { media ->
+                                SnapTubeOptionCard(
+                                    title = media.title,
+                                    subtitle = media.url,
+                                    badge = media.resolution,
+                                    isSelected = selectedMediaUrl == media.url,
+                                    onClick = { selectedMediaUrl = media.url }
+                                )
                             }
                         }
                     }
                 },
                 confirmButton = {
                     Button(
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)),
                         onClick = {
+                            if (selectedMediaUrl.isEmpty()) {
+                                Toast.makeText(context, "الرجاء تحديد ملف للتحميل", Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
                             showDownloadDialog = false
-                            val finalTitle = customTitle.ifEmpty { "Downloaded File" }
-                            when (selectedFormat) {
-                                "RESUMABLE_VIDEO" -> viewModel.downloadResumableMedia(context, remoteUrlInput, finalTitle, "VIDEO")
-                                "RESUMABLE_FILE" -> viewModel.downloadResumableMedia(context, remoteUrlInput, finalTitle, "FILE")
-                                "HTML_SCRAPE" -> viewModel.downloadHtmlGame(context, remoteUrlInput, finalTitle)
-                                "DIRECT_ZIP" -> viewModel.downloadZipGame(context, remoteUrlInput, finalTitle)
-                                "FLASH_SWF" -> viewModel.downloadFlashGame(context, remoteUrlInput, finalTitle)
+                            val finalTitle = customTitle.ifEmpty { "Downloaded Media" }
+                            val cookies = try { android.webkit.CookieManager.getInstance().getCookie(selectedMediaUrl) } catch(e: Exception) { null }
+                            val ua = webViewRef?.settings?.userAgentString
+                            val referer = currentUrl
+
+                            val media = detectedMediaList.find { it.url == selectedMediaUrl } ?: return@Button
+
+                            if (media.type == "VIDEO" || media.type == "AUDIO") {
+                                viewModel.downloadResumableMedia(
+                                    context = context,
+                                    url = selectedMediaUrl,
+                                    title = "$finalTitle (${media.resolution})",
+                                    category = media.type,
+                                    numSegments = selectedThreads,
+                                    userAgent = ua,
+                                    cookies = cookies,
+                                    referer = referer
+                                )
+                            } else if (media.type == "SWF") {
+                                viewModel.downloadFlashGame(context, selectedMediaUrl, finalTitle)
+                            } else if (media.type == "ZIP") {
+                                viewModel.downloadZipGame(context, selectedMediaUrl, finalTitle)
+                            } else {
+                                viewModel.downloadViaSystemManager(
+                                    context = context,
+                                    url = selectedMediaUrl,
+                                    title = finalTitle,
+                                    userAgent = ua,
+                                    cookies = cookies,
+                                    referer = referer
+                                )
                             }
                         }
                     ) {
-                        Text("Start Download")
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text("⚡ تحميل الآن (Start Download)", fontWeight = FontWeight.Bold)
+                        }
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showDownloadDialog = false }) {
-                        Text("Cancel")
+                        Text("إلغاء")
                     }
                 }
             )
+        }
+    }
+
+    // Overlays of Downloads and Bookmarks
+    if (showDownloadsOverlay) {
+        AlertDialog(
+            onDismissRequest = { showDownloadsOverlay = false },
+            title = { Text("سجل التنزيلات والوسائط 📥", fontWeight = FontWeight.Bold) },
+            text = {
+                Box(modifier = Modifier.fillMaxWidth().height(450.dp)) {
+                    DownloadsScreen(
+                        viewModel = viewModel,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDownloadsOverlay = false }) {
+                    Text("إغلاق", color = Color(0xFF4CAF50))
+                }
+            }
+        )
+    }
+
+    if (showSavedOverlay) {
+        AlertDialog(
+            onDismissRequest = { showSavedOverlay = false },
+            title = { Text("المفضلة والألعاب المحفوظة 🔖", fontWeight = FontWeight.Bold) },
+            text = {
+                Box(modifier = Modifier.fillMaxWidth().height(450.dp)) {
+                    SavedScreen(
+                        viewModel = viewModel,
+                        onNavigateToUrl = { url ->
+                            viewModel.updateUrl(url)
+                            webViewRef?.loadUrl(url)
+                            showSavedOverlay = false
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSavedOverlay = false }) {
+                    Text("إغلاق", color = Color(0xFF4CAF50))
+                }
+            }
+        )
+    }
+
+    val playingGame by viewModel.playingGame.collectAsState()
+
+    // Fullscreen Overlay Offline Game Player
+    AnimatedVisibility(
+        visible = playingGame != null,
+        enter = fadeIn(),
+        exit = fadeOut()
+    ) {
+        playingGame?.let { game ->
+            GamePlayerScreen(
+                game = game,
+                onClose = { viewModel.stopPlaying() },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+@Composable
+private fun SnapTubeOptionCard(
+    title: String,
+    subtitle: String,
+    badge: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = if (isSelected) Color(0xFFFFEBEE) else MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (isSelected) 2.dp else 1.dp,
+            color = if (isSelected) Color(0xFFE53935) else MaterialTheme.colorScheme.outlineVariant
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                RadioButton(
+                    selected = isSelected,
+                    onClick = onClick,
+                    colors = RadioButtonDefaults.colors(selectedColor = Color(0xFFE53935))
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Column {
+                    Text(
+                        text = title,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = if (isSelected) Color(0xFFD32F2F) else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = subtitle,
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Surface(
+                color = if (isSelected) Color(0xFFE53935) else MaterialTheme.colorScheme.secondaryContainer,
+                shape = RoundedCornerShape(6.dp)
+            ) {
+                Text(
+                    text = badge,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
         }
     }
 }
@@ -541,10 +950,10 @@ private fun formatUrl(input: String): String {
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
         return trimmed
     }
-    // Simple Google search query fallback
+    // Bing search query fallback
     if (trimmed.contains(" ") || !trimmed.contains(".")) {
         val query = trimmed.replace(" ", "+")
-        return "https://www.google.com/search?q=$query"
+        return "https://www.bing.com/search?q=$query"
     }
     return "https://$trimmed"
 }

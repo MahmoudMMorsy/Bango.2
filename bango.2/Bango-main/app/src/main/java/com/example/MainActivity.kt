@@ -13,16 +13,38 @@ import com.example.ui.screens.MainScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.MainViewModel
 
+import com.example.data.db.AppDatabase
+import com.example.data.GameRepository
+import com.example.ui.GameViewModel
+import com.example.ui.GameViewModelFactory
+import com.yausername.youtubedl_android.YoutubeDL
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Initialize YoutubeDL for premium media downloading capability
+        try {
+            YoutubeDL.getInstance().init(application)
+        } catch (e: Exception) {
+            android.util.Log.e("YoutubeDL", "Failed to initialize youtubedl-android", e)
+        }
+
+        // Initialize Room Database and Repository
+        val database = AppDatabase.getDatabase(this)
+        val repository = GameRepository(database.gameDao())
+
         setContent {
             MyApplicationTheme {
-                val viewModel: MainViewModel = viewModel()
+                val mainViewModel: MainViewModel = viewModel()
+                val gameViewModel: GameViewModel = viewModel(
+                    factory = GameViewModelFactory(repository)
+                )
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     MainScreen(
-                        viewModel = viewModel,
+                        viewModel = mainViewModel,
+                        gameViewModel = gameViewModel,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }

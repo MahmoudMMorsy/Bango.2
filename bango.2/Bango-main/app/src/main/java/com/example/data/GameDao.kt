@@ -10,7 +10,7 @@ interface GameDao {
     fun getAllGames(): Flow<List<GameEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertGame(game: GameEntity)
+    suspend fun insertGame(game: GameEntity): Long
 
     @Update
     suspend fun updateGame(game: GameEntity)

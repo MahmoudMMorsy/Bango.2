@@ -62,6 +62,8 @@ import com.example.ui.theme.SecondaryBlue
 import com.example.ui.theme.SurfaceCard
 import com.example.ui.theme.SurfaceDark
 import com.example.ui.viewmodel.MainViewModel
+import com.example.ui.BrowserScreen
+import com.example.ui.GameViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -69,6 +71,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
+    gameViewModel: GameViewModel,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -292,9 +295,9 @@ fun MainScreen(
                                 }
                             }
                         )
-                        1 -> AutopilotTab(
-                            viewModel = viewModel,
-                            defaultProfile = defaultProfile,
+                        1 -> BrowserScreen(
+                            viewModel = gameViewModel,
+                            mainViewModel = viewModel,
                             onWebViewCreated = { webView ->
                                 activeWebViewReference = webView
                             }

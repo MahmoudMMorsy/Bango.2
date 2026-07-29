@@ -56,14 +56,15 @@ fun GamePlayerScreen(
             } else {
                 Pair("error", "index.html launcher not found in game folder")
             }
-        } else if (game.gameType == "VIDEO" || game.gameType == "FILE") {
-            val mediaFile = folder.listFiles()?.firstOrNull { !it.name.endsWith(".zip", ignoreCase = true) }
-            if (mediaFile != null && mediaFile.exists()) {
+        } else if (game.gameType == "VIDEO" || game.gameType == "AUDIO" || game.gameType == "DOC" || game.gameType == "FILE") {
+            val mediaFile = File(game.zipPath)
+            if (mediaFile.exists()) {
                 val isVideoOrAudio = mediaFile.name.let { name ->
                     name.endsWith(".mp4", true) || name.endsWith(".webm", true) ||
                     name.endsWith(".mkv", true) || name.endsWith(".avi", true) ||
                     name.endsWith(".mov", true) || name.endsWith(".mp3", true) ||
-                    name.endsWith(".wav", true) || name.endsWith(".ogg", true)
+                    name.endsWith(".wav", true) || name.endsWith(".ogg", true) ||
+                    name.endsWith(".m4a", true)
                 }
                 if (isVideoOrAudio) {
                     val mediaHtml = """
@@ -86,7 +87,7 @@ fun GamePlayerScreen(
                     Pair("html_url", "file://${mediaFile.absolutePath}")
                 }
             } else {
-                Pair("error", "Downloaded file not found in media folder")
+                Pair("error", "Downloaded file not found: ${mediaFile.name}")
             }
         } else {
             // Flash SWF file lookup
@@ -190,11 +191,8 @@ fun GamePlayerScreen(
                             settings.apply {
                                 javaScriptEnabled = true
                                 domStorageEnabled = true
-                                databaseEnabled = true
                                 allowFileAccess = true
                                 allowContentAccess = true
-                                allowFileAccessFromFileURLs = true
-                                allowUniversalAccessFromFileURLs = true
                                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                             }
 

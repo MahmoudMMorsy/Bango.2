@@ -3,6 +3,7 @@ package com.example.util
 import android.content.Context
 import android.util.Log
 import com.example.data.GameEntity
+import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.*
@@ -13,9 +14,72 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLRequest
+import com.yausername.youtubedl_android.YoutubeDLException
+
 object GameDownloader {
     private const val TAG = "GameDownloader"
     private val client = OkHttpClient.Builder().build()
+
+    /**
+     * YoutubeDL Downloader
+     */
+    suspend fun downloadWithYoutubeDL(
+        context: Context,
+        url: String,
+        title: String,
+        onProgress: (String) -> Unit
+    ): GameEntity {
+        val gameId = UUID.randomUUID().toString().take(8)
+        val safeTitle = title.replace("[^a-zA-Z0-9]".toRegex(), "_")
+
+        val downloadsDir = File(context.filesDir, "downloads")
+        if (!downloadsDir.exists()) downloadsDir.mkdirs()
+
+        val request = YoutubeDLRequest(url)
+        request.addOption("-o", File(downloadsDir, "${safeTitle}_$gameId.%(ext)s").absolutePath)
+
+        // You can add more options if needed
+        // request.addOption("-f", "bestvideo+bestaudio/best")
+
+        onProgress("Initializing YoutubeDL...")
+
+        withContext(Dispatchers.IO) {
+            YoutubeDL.getInstance().execute(request) { progress, etaInSeconds, line ->
+                val progressStr = String.format("%.2f", progress)
+                onProgress("Downloading: $progressStr% (ETA: $etaInSeconds s)\n$line")
+            }
+        }
+
+        // Find the downloaded file
+        var downloadedFile: File? = null
+        val files = downloadsDir.listFiles()
+        if (files != null) {
+            for (f in files) {
+                if (f.name.startsWith("${safeTitle}_$gameId")) {
+                    downloadedFile = f
+                    break
+                }
+            }
+        }
+
+        if (downloadedFile == null || !downloadedFile.exists()) {
+            throw IOException("Download failed, output file not found")
+        }
+
+        val ext = downloadedFile.extension.uppercase()
+        val type = if (ext == "MP4" || ext == "MKV" || ext == "WEBM") "VIDEO" else "AUDIO"
+
+        return GameEntity(
+            title = title,
+            sourceUrl = url,
+            localFolder = downloadedFile.parentFile?.absolutePath ?: downloadsDir.absolutePath,
+            zipPath = downloadedFile.absolutePath,
+            gameType = type,
+            sizeBytes = downloadedFile.length()
+        )
+    }
 
     /**
      * Downloads an HTML webpage, parses its scripts/stylesheets/images,
@@ -257,16 +321,29 @@ object GameDownloader {
         }
     }
 
+    fun formatSpeed(bytesPerSec: Long): String {
+        return when {
+            bytesPerSec >= 1024 * 1024 -> String.format("%.2f MB/s", bytesPerSec / (1024.0 * 1024.0))
+            bytesPerSec >= 1024 -> String.format("%.1f KB/s", bytesPerSec / 1024.0)
+            else -> "$bytesPerSec B/s"
+        }
+    }
+
     /**
-     * Resumable file/video downloader using HTTP Range headers.
-     * Supports resuming broken or interrupted downloads without file corruption.
+     * IDM Multi-Segment Accelerated & Resumable File/Video/Media Downloader.
+     * Splits file into multiple parallel streams (e.g. 8 threads) using HTTP Range headers,
+     * updates live transfer speeds, and seamlessly merges chunks without file corruption.
      */
     suspend fun downloadResumableFile(
         context: Context,
         fileUrl: String,
         title: String,
-        fileTypeCategory: String, // "VIDEO" or "FILE"
-        onProgress: (String, Long, Long) -> Unit
+        fileTypeCategory: String, // "VIDEO", "AUDIO", "DOC", "ARCHIVE", "FILE"
+        numSegments: Int = 8,
+        userAgent: String? = null,
+        cookies: String? = null,
+        referer: String? = null,
+        onProgress: (String, Long, Long, Long, Int) -> Unit
     ): GameEntity {
         val gameId = UUID.randomUUID().toString().take(8)
         val safeTitle = title.replace("[^a-zA-Z0-9]".toRegex(), "_")
@@ -276,49 +353,196 @@ object GameDownloader {
 
         var ext = getFileExtensionFromUrl(fileUrl)
         if (ext.isEmpty()) {
-            ext = if (fileTypeCategory == "VIDEO") "mp4" else "bin"
+            ext = when (fileTypeCategory) {
+                "VIDEO" -> "mp4"
+                "AUDIO" -> "mp3"
+                "DOC" -> "pdf"
+                "ARCHIVE" -> "zip"
+                else -> "bin"
+            }
         }
 
         val targetFile = File(downloadsDir, "${safeTitle}_$gameId.$ext")
-        val existingLength = if (targetFile.exists()) targetFile.length() else 0L
+        val tempDir = File(downloadsDir, "parts_$gameId")
+        if (!tempDir.exists()) tempDir.mkdirs()
 
-        onProgress("Connecting to server...", existingLength, 0L)
+        onProgress("Checking server connection & range support...", 0L, 0L, 0L, 1)
 
-        val requestBuilder = Request.Builder().url(fileUrl)
-        if (existingLength > 0) {
-            requestBuilder.addHeader("Range", "bytes=$existingLength-")
+        val defaultUa = if (!userAgent.isNullOrBlank()) userAgent else "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+        fun applyHeaders(builder: Request.Builder) {
+            builder.header("User-Agent", defaultUa)
+            if (!cookies.isNullOrBlank()) {
+                builder.header("Cookie", cookies)
+            }
+            if (!referer.isNullOrBlank()) {
+                builder.header("Referer", referer)
+            }
         }
 
-        client.newCall(requestBuilder.build()).execute().use { response ->
-            if (!response.isSuccessful && response.code != 206) {
-                throw IOException("Server returned HTTP ${response.code}: ${response.message}")
+        // 1. Check HTTP headers & range support
+        val headReqBuilder = Request.Builder().url(fileUrl)
+        applyHeaders(headReqBuilder)
+        val headReq = headReqBuilder.build()
+
+        var totalBytes = -1L
+        var acceptsRanges = false
+
+        try {
+            client.newCall(headReq).execute().use { resp ->
+                val rangeHeader = resp.header("Accept-Ranges")
+                val lengthHeader = resp.header("Content-Length")
+                acceptsRanges = rangeHeader?.contains("bytes", ignoreCase = true) == true || resp.code == 206
+                totalBytes = lengthHeader?.toLongOrNull() ?: -1L
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "HEAD request failed, using single stream fallback", e)
+        }
+
+        val activeThreads = if (acceptsRanges && totalBytes > 2 * 1024 * 1024) numSegments else 1
+
+        if (activeThreads > 1) {
+            val segmentSize = totalBytes / activeThreads
+            val downloadedBytesAtomic = java.util.concurrent.atomic.AtomicLong(0L)
+            var lastTime = System.currentTimeMillis()
+            var lastBytes = 0L
+
+            val segmentParts = List(activeThreads) { i ->
+                File(tempDir, "part_$i.tmp")
             }
 
-            val isPartial = response.code == 206
-            val body = response.body ?: throw IOException("Empty response body")
-            val contentLength = body.contentLength()
-            val totalBytes = if (isPartial) existingLength + contentLength else contentLength
+            segmentParts.forEach { downloadedBytesAtomic.addAndGet(if (it.exists()) it.length() else 0L) }
 
-            val appendMode = isPartial && existingLength > 0
-            val fos = FileOutputStream(targetFile, appendMode)
+            coroutineScope {
+                val jobs = segmentParts.mapIndexed { index, partFile ->
+                    async(Dispatchers.IO) {
+                        val startByte = index * segmentSize
+                        val endByte = if (index == activeThreads - 1) totalBytes - 1 else (startByte + segmentSize - 1)
+                        val existingLength = if (partFile.exists()) partFile.length() else 0L
 
-            body.byteStream().use { inputStream ->
-                val buffer = ByteArray(64 * 1024) // 64KB chunks
-                var bytesRead: Int
-                var currentDownloaded = if (appendMode) existingLength else 0L
+                        if (existingLength < (endByte - startByte + 1)) {
+                            val currentStart = startByte + existingLength
+                            val reqBuilder = Request.Builder()
+                                .url(fileUrl)
+                                .header("Range", "bytes=$currentStart-$endByte")
+                            applyHeaders(reqBuilder)
+                            val req = reqBuilder.build()
 
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    fos.write(buffer, 0, bytesRead)
-                    currentDownloaded += bytesRead
-                    val percent = if (totalBytes > 0) (currentDownloaded * 100 / totalBytes).toInt() else -1
-                    val progressMsg = if (percent >= 0) "Downloading: $percent% (${currentDownloaded / 1024} KB / ${totalBytes / 1024} KB)" else "Downloaded ${currentDownloaded / 1024} KB..."
-                    onProgress(progressMsg, currentDownloaded, totalBytes)
+                            client.newCall(req).execute().use { resp ->
+                                if (resp.isSuccessful || resp.code == 206) {
+                                    val body = resp.body ?: return@use
+                                    val fos = FileOutputStream(partFile, true)
+                                    body.byteStream().use { input ->
+                                        val buffer = ByteArray(32 * 1024)
+                                        var read: Int
+                                        while (input.read(buffer).also { read = it } != -1) {
+                                            fos.write(buffer, 0, read)
+                                            val totalDl = downloadedBytesAtomic.addAndGet(read.toLong())
+
+                                            val now = System.currentTimeMillis()
+                                            if (now - lastTime >= 350) {
+                                                val timeDiffSec = (now - lastTime) / 1000.0
+                                                val speed = if (timeDiffSec > 0) ((totalDl - lastBytes) / timeDiffSec).toLong() else 0L
+                                                lastTime = now
+                                                lastBytes = totalDl
+
+                                                val speedText = formatSpeed(speed)
+                                                val progressMsg = "Accelerated ($activeThreads Streams): $speedText"
+                                                onProgress(progressMsg, totalDl, totalBytes, speed, activeThreads)
+                                            }
+                                        }
+                                        fos.flush()
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                fos.flush()
+                jobs.awaitAll()
+            }
+
+            // Assembly step
+            onProgress("Merging $activeThreads chunks into final file...", totalBytes, totalBytes, 0L, 1)
+            FileOutputStream(targetFile, false).use { out ->
+                segmentParts.forEach { part ->
+                    if (part.exists()) {
+                        part.inputStream().use { inStream ->
+                            inStream.copyTo(out)
+                        }
+                        part.delete()
+                    }
+                }
+            }
+            tempDir.deleteRecursively()
+        } else {
+            // Single stream fallback with resume
+            val reqBuilder = Request.Builder().url(fileUrl)
+            applyHeaders(reqBuilder)
+
+            val existingLength = if (targetFile.exists()) targetFile.length() else 0L
+            if (existingLength > 0) reqBuilder.header("Range", "bytes=$existingLength-")
+
+            client.newCall(reqBuilder.build()).execute().use { response ->
+                if (!response.isSuccessful && response.code != 206) {
+                    throw IOException("Server returned HTTP ${response.code}")
+                }
+                val body = response.body ?: throw IOException("Empty body")
+                val isPartial = response.code == 206
+                val cLength = body.contentLength()
+                if (totalBytes <= 0) totalBytes = if (isPartial) existingLength + cLength else cLength
+
+                val appendMode = isPartial && existingLength > 0
+                val fos = FileOutputStream(targetFile, appendMode)
+
+                var downloaded = if (appendMode) existingLength else 0L
+                var lastTime = System.currentTimeMillis()
+                var lastBytes = downloaded
+
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    var read: Int
+                    while (input.read(buffer).also { read = it } != -1) {
+                        fos.write(buffer, 0, read)
+                        downloaded += read
+                        val now = System.currentTimeMillis()
+                        if (now - lastTime >= 350) {
+                            val timeDiff = (now - lastTime) / 1000.0
+                            val speed = if (timeDiff > 0) ((downloaded - lastBytes) / timeDiff).toLong() else 0L
+                            lastTime = now
+                            lastBytes = downloaded
+
+                            val speedText = formatSpeed(speed)
+                            onProgress("Downloading: $speedText", downloaded, totalBytes, speed, 1)
+                        }
+                    }
+                    fos.flush()
+                }
             }
         }
 
-        // Create local folder structure
+        // Export copy to Public External Storage Downloads folder so user sees real file in phone
+        var publicFilePath = targetFile.absolutePath
+        try {
+            val publicDownloads = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            if (publicDownloads != null) {
+                if (!publicDownloads.exists()) publicDownloads.mkdirs()
+                val publicFile = File(publicDownloads, "${safeTitle}_$gameId.$ext")
+                targetFile.copyTo(publicFile, overwrite = true)
+                publicFilePath = publicFile.absolutePath
+
+                // Notify MediaScanner so Android Gallery & Music Player register the file immediately
+                android.media.MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(publicFile.absolutePath),
+                    arrayOf(if (fileTypeCategory == "VIDEO") "video/mp4" else if (fileTypeCategory == "AUDIO") "audio/mpeg" else null),
+                    null
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not copy to public downloads folder", e)
+        }
+
+        // Save local folder structure
         val localFolder = File(context.filesDir, "games/media_$gameId")
         localFolder.mkdirs()
         targetFile.copyTo(File(localFolder, targetFile.name), overwrite = true)
@@ -330,10 +554,51 @@ object GameDownloader {
             title = title,
             sourceUrl = fileUrl,
             localFolder = localFolder.absolutePath,
-            zipPath = zipFile.absolutePath,
+            zipPath = publicFilePath,
             gameType = fileTypeCategory,
-            sizeBytes = targetFile.length()
+            timestamp = System.currentTimeMillis(),
+            sizeBytes = targetFile.length(),
+            downloadedBytes = targetFile.length(),
+            status = "COMPLETED",
+            speedInfo = "Accelerated ($activeThreads Streams)",
+            numSegments = activeThreads
         )
+    }
+
+    /**
+     * Native Android DownloadManager trigger for system notification bar downloading.
+     */
+    fun enqueueSystemDownload(
+        context: Context,
+        url: String,
+        title: String,
+        userAgent: String? = null,
+        cookies: String? = null,
+        referer: String? = null
+    ): Long {
+        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+        val uri = android.net.Uri.parse(url)
+        val request = android.app.DownloadManager.Request(uri)
+
+        val safeTitle = title.replace("[^a-zA-Z0-9_ -]".toRegex(), "_")
+        var ext = getFileExtensionFromUrl(url)
+        if (ext.isEmpty()) ext = "mp4"
+
+        request.setTitle(title)
+        request.setDescription("Downloading $title...")
+        request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "$safeTitle.$ext")
+
+        val ua = if (!userAgent.isNullOrBlank()) userAgent else "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
+        request.addRequestHeader("User-Agent", ua)
+        if (!cookies.isNullOrBlank()) {
+            request.addRequestHeader("Cookie", cookies)
+        }
+        if (!referer.isNullOrBlank()) {
+            request.addRequestHeader("Referer", referer)
+        }
+
+        return downloadManager.enqueue(request)
     }
 
     // Helper to find index.html recursively
@@ -369,7 +634,7 @@ object GameDownloader {
     }
 
     // Extract file name from URL, removing query parameters
-    private fun getFileNameFromUrl(urlString: String): String {
+    fun getFileNameFromUrl(urlString: String): String {
         return try {
             val url = URL(urlString)
             var path = url.path
