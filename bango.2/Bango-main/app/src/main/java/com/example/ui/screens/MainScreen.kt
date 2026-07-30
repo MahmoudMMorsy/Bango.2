@@ -120,7 +120,7 @@ fun MainScreen(
                                 }
                                 Column {
                                     Text(
-                                        text = "برنامج بانجو الآلي v2",
+                                        text = "برنامج بانجو الآلي v3",
                                         fontSize = 16.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = Color.White
@@ -1490,7 +1490,7 @@ fun BingSplashScreen() {
 
             // Brand Titles
             Text(
-                text = "برنامج بانجو الآلي v2",
+                text = "برنامج بانجو الآلي v3",
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
@@ -1498,7 +1498,7 @@ fun BingSplashScreen() {
             )
 
             Text(
-                text = "Bango Antidetect Browser",
+                text = "Bango 3 Antidetect Browser",
                 fontSize = 14.sp,
                 color = Color(0xFF4CAF50),
                 fontWeight = FontWeight.SemiBold,
